@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.0)
-project(bomb-it-client)
+project(utils)
 
 set(CMAKE_CXX_STANDARD 20)
 
@@ -8,13 +8,13 @@ include_directories(${BOOST_INCLUDE_DIRS})
 message("boost lib: ${Boost_LIBRARIES}")
 message("boost inc:${Boost_INCLUDE_DIR}")
 
-add_executable(${PROJECT_NAME} bomb-it-client.cpp)
-target_include_directories(${PROJECT_NAME}
-        PUBLIC utils
-        )
-target_link_libraries(${PROJECT_NAME}
-        ${Boost_LIBRARIES}
-        utils
-        )
+file(GLOB SOURCES src/*)
+add_library(${PROJECT_NAME} ${SOURCES})
 
-install(TARGETS DESTINATION .)
+target_include_directories(${PROJECT_NAME}
+        PUBLIC
+            $<INSTALL_INTERFACE:include>
+            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+        PRIVATE
+            ${Boost_LIBRARIES}
+        )

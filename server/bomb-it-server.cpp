@@ -10,7 +10,7 @@ int main()
     {
         boost::asio::io_context io_context;
 
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v4(), 2137));
+        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v6(), 2137));
 
         for (;;)
         {
