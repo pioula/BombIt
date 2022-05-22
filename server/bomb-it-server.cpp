@@ -1,26 +1,38 @@
-#include <ctime>
 #include <iostream>
+#include <boost/array.hpp>
 #include <boost/asio.hpp>
 
 using boost::asio::ip::tcp;
 
-int main()
+int main(int argc, char* argv[])
 {
     try
     {
+
         boost::asio::io_context io_context;
 
-        tcp::acceptor acceptor(io_context, tcp::endpoint(tcp::v6(), 2137));
+        tcp::resolver resolver(io_context);
+        tcp::resolver::results_type endpoints =
+                resolver.resolve("students.mimuw.edu.pl", "10200");
+
+        tcp::socket socket(io_context);
+        boost::asio::connect(socket, endpoints);
 
         for (;;)
         {
-            tcp::socket socket(io_context);
-            acceptor.accept(socket);
+            puts("Begin");
+            std::string buf;
+            boost::system::error_code error;
 
-            std::string message = "Witaj ważnaku!";
+            size_t len = socket.read_some(boost::asio::buffer(buf), error);
 
-            boost::system::error_code ignored_error;
-            boost::asio::write(socket, boost::asio::buffer(message), ignored_error);
+            if (error == boost::asio::error::eof)
+                break; // Connection closed cleanly by peer.
+            else if (error)
+                throw boost::system::system_error(error); // Some other error.
+
+            std::cout << len << " " << buf[1] << std::endl;
+            puts("End");
         }
     }
     catch (std::exception& e)

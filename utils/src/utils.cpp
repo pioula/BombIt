@@ -14,6 +14,7 @@ using std::exception;
 using std::vector;
 
 using boost::asio::ip::tcp;
+using boost::asio::ip::udp;
 
 namespace as = boost::asio;
 namespace po = boost::program_options;
@@ -44,14 +45,20 @@ bool parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
     for (const auto &flag: flags) {
         if (vm.count(flag.long_name)) {
             flag.handler(vm, desc);
-            if (flag.long_name ==  "help")
-                return true;
         }
-        else {
-            if (flag.long_name != "help")
+        else if (flag.required) {
                 throw MissingFlag();
         }
     }
 
     return true;
+}
+
+host_address_t parse_host_address(const string &host) {
+    if (auto port_pos = host.find_last_of(':') + 1) {
+        return {host.substr(0, port_pos - 1), host.substr(port_pos)};
+    }
+    else {
+        return INVALID_ADDRESS;
+    }
 }
