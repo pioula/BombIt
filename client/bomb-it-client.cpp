@@ -26,6 +26,7 @@ using std::exception;
 using std::vector;
 using std::cerr;
 using std::unordered_map;
+using std::copy_n;
 
 using boost::asio::ip::tcp;
 using boost::asio::ip::udp;
@@ -75,8 +76,8 @@ enum Direction {
 };
 
 using player_t = struct player_t {
-    string name;
-    string address;
+    name_t name;
+    name_t address;
 };
 
 using player_map_t = unordered_map<player_num_t, player_t>;
@@ -90,7 +91,7 @@ using command_parameters_t = struct command_parameters {
 
 /// additional structs
 using server_info_t = struct server_info_t {
-    string server_name;
+    name_t server_name;
     player_num_t players_count;
     coords_t size_x;
     coords_t size_y;
@@ -136,7 +137,7 @@ struct move_t { // Used also for Client -> server
 
 /// Client -> Server
 using join_t = struct join_t {
-    string name;
+    name_t name;
 };
 
 /// Server -> Client
@@ -230,37 +231,103 @@ optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
         return nullopt;
 }
 
-datagram_t join(const string &name) {
-    datagram_t buf;
-    return buf;
+void join(datagram_t &buf, const string &name) {
+    buf[0] = CS_JOIN;
+    copy_string(buf, name, 1);
 }
 
 void from_gui_to_server(const command_parameters_t &cp) {
-    UDPClient gui_handler(cp.gui_address, cp.port);
-    TCPClient server_handler(cp.server_address);
+    UDPClient* gui_handler = UDPClient::get_instance(cp.gui_address, cp.port);
+    TCPClient* server_handler = TCPClient::get_instance(cp.server_address);
+
     datagram_t gui_buf;
     datagram_t server_buf;
-    size_t len = server_handler.receive(server_buf);
-    cout << len << " lol\n";
-    for(size_t i = 0; i < len; i++) {
-        cout << server_buf[i];
-    }
-    puts("OK");
 
-//    server_handler.send(join(cp.player_name));
-//    for (;;) {
-//
-//    }
+    gui_handler->receive(gui_buf);
+    join(server_buf, cp.player_name);
+    server_handler->send(server_buf);
+    for (;;) {
+        gui_handler->receive(gui_buf);
+        gui_buf[0]++;
+        server_handler->send(gui_buf);
+    }
+}
+/*
+[0] Lobby {
+        server_name: String,
+        players_count: u8,
+        size_x: u16,
+        size_y: u16,
+        game_length: u16,
+        explosion_radius: u16,
+        bomb_timer: u16,
+        players: Map<PlayerId, Player>
+    },
+    [1] Game {
+        server_name: String,
+        size_x: u16,
+        size_y: u16,
+        game_length: u16,
+        turn: u16,
+        players: Map<PlayerId, Player>,
+        player_positions: Map<PlayerId, Position>,
+        blocks: List<Position>,
+        bombs: List<Bomb>,
+        explosions: List<Position>,
+        scores: Map<PlayerId, Score>,
+    },
+
+ [0] Hello {
+        server_name: String,
+        players_count: u8,
+        size_x: u16,
+        size_y: u16,
+        game_length: u16,
+        explosion_radius: u16,
+        bomb_timer: u16,
+    },
+    [1] AcceptedPlayer {
+        id: PlayerId,
+        player: Player,
+    },
+ */
+hello_t parse_hello(datagram_t server_buf) {
+    hello_t res;
+    size_t act_pos = 1;
+    parse_string(server_buf, res.server_info.server_name, act_pos);
+    parse_u8(server_buf, res.server_info.players_count, act_pos);
+    parse_u16(server_buf, res.server_info.size_x, act_pos);
+    parse_u16(server_buf, res.server_info.size_y, act_pos);
+    parse_u16(server_buf, res.server_info.game_length, act_pos);
+    parse_u16(server_buf, res.explosion_radius, act_pos);
+    parse_u16(server_buf, res.bomb_timer, act_pos);
+
+    return res;
 }
 
-void from_server_to_gui() {
+
+void from_server_to_gui(const command_parameters_t &cp) {
+    UDPClient* gui_handler = UDPClient::get_instance(cp.gui_address, cp.port);
+    TCPClient* server_handler = TCPClient::get_instance(cp.server_address);
+
+    datagram_t gui_buf;
+    datagram_t server_buf;
+
+    size_t len = server_handler->receive(server_buf);
+    for (size_t i = 0; i < len; i++) {
+        cout << server_buf[i];
+    }
+    puts("");
+    hello_t server_info = parse_hello(server_buf);
+    cout << server_info.server_info.server_name.data() << " " << (int)server_info.server_info.players_count << " " << server_info.server_info.game_length << " " << server_info.server_info.size_x << " " << server_info.server_info.size_y << " " << server_info.explosion_radius << " " << server_info.bomb_timer << " \n";
+    puts("JAJO");
 }
 
 int main(int argc, char *argv[]) {
-    command_parameters_t command_parameters;
+    command_parameters_t cp;
     try {
-        if (auto cp = parse_parameters(argc, argv))
-            command_parameters = *cp;
+        if (auto cp_option = parse_parameters(argc, argv))
+            cp = *cp_option;
         else
             return 0;
     }
@@ -269,7 +336,7 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    from_gui_to_server(command_parameters);
+    from_server_to_gui(cp);
 
     cout << "End!" << endl;
 }

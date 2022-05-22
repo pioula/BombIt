@@ -9,12 +9,12 @@
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
 #include <boost/program_options.hpp>
-
-#include <utils.h>
+#include <arpa/inet.h>
 
 
 constexpr uint16_t UDP_DATAGRAM_SIZE = 65515;
 
+using name_t = boost::array<char, 256>;
 using port_t = uint16_t;
 using datagram_t = boost::array<char, UDP_DATAGRAM_SIZE>;
 
@@ -54,23 +54,31 @@ bool parse_command_line(int argc, char *argv[], std::vector<flag_t> &flags);
 host_address_t parse_host_address(const std::string &host);
 
 class UDPClient {
-private:
+protected:
     as::io_context io_context;
     udp::resolver resolver;
     udp::endpoint endpoint;
     udp::socket socket;
-public:
-    UDPClient(const host_address &address, const port_t port) :
+
+    UDPClient(const host_address &address, const port_t &port) :
             resolver(udp::resolver(io_context)),
             socket(udp::socket(io_context, udp::endpoint(udp::v6(), port))) {
         endpoint = *resolver.resolve(address.host, address.port).begin();
     }
 
-    ~UDPClient() {
+    static UDPClient* singleton;
+public:
+    UDPClient(UDPClient &other) = delete;
+
+    void operator=(const UDPClient &) = delete;
+
+    static UDPClient *get_instance(const host_address &address,
+                                   const port_t &port);
+    ~UDPClient() { //TODO ogarnączy ddziała czy nie
         socket.close();
     }
 
-    size_t receive(datagram_t &arr) {
+    size_t receive(datagram_t &arr) { //TODO exception safety
         return socket.receive(as::buffer(arr));
     }
 
@@ -80,12 +88,12 @@ public:
 };
 
 class TCPClient {
-private:
+protected:
     as::io_context io_context;
     tcp::resolver resolver;
     tcp::resolver::results_type endpoints;
     tcp::socket socket;
-public:
+
     TCPClient(const host_address &address) :
             resolver(tcp::resolver(io_context)),
             socket(tcp::socket(io_context)) {
@@ -95,6 +103,14 @@ public:
         as::connect(socket, endpoints);
     }
 
+    static TCPClient* singleton;
+public:
+
+    TCPClient(TCPClient &other) = delete;
+
+    void operator=(const TCPClient &) = delete;
+
+    static TCPClient *get_instance(const host_address &address);
     ~TCPClient() {
         socket.close();
     }
@@ -108,4 +124,9 @@ public:
     }
 };
 
+void copy_string(datagram_t &buf, const std::string &str, size_t pos);
+
+void parse_string(const datagram_t &buf, name_t &str, size_t &pos);
+void parse_u8(const datagram_t &buf, uint8_t &n, size_t &pos);
+void parse_u16(const datagram_t &buf, uint16_t &n, size_t &pos);
 #endif // UTILS_H
