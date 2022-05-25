@@ -264,7 +264,7 @@ public:
     }
 
     template<class T, class V>
-    DatagramWriter* write(std::unordered_map<T, V> &m) {
+    DatagramWriter* write(const std::unordered_map<T, V> &m) {
         write(static_cast<container_size_t>(m.size()));
         for (const auto &item: m) {
             write(item.first)->write(item.second);
@@ -272,7 +272,7 @@ public:
         return this;
     }
 
-    DatagramWriter* write(position_set &s) {
+    DatagramWriter* write(const position_set &s) {
         write(static_cast<container_size_t>(s.size()));
         for (const auto &item: s) {
             write(item);

@@ -25,7 +25,9 @@ using coords_t = uint16_t;
 using container_size_t = uint32_t;
 using bomb_id_t = uint32_t;
 using game_time_t = uint16_t;
+using direction_t = uint8_t;
 
+using message_length_t = uint16_t;
 
 using position_t = struct position_t {
     coords_t x;
@@ -58,6 +60,11 @@ using hello_t = struct hello_t {
     explosion_radius_t explosion_radius;
     game_time_t bomb_timer;
 };
+
+constexpr message_length_t GC_PLACE_BOMB_LENGTH = 1;
+constexpr message_length_t GC_PLACE_BLOCK_LENGTH = 1;
+constexpr message_length_t GC_MOVE_LENGTH = 2;
+constexpr direction_t MAX_DIRECTION = 3;
 
 constexpr message_id_t GC_PLACE_BOMB = 0;
 constexpr message_id_t GC_PLACE_BLOCK = 1;
