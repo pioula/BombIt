@@ -1,25 +1,16 @@
-#include <utils.h>
-#include <iostream>
-#include <cstring>
+#include "command_parser.h"
 
-using std::cout;
-using std::endl;
-using std::string;
-using std::optional;
-using std::nullopt;
-using std::variant;
-using std::get;
-using std::visit;
-using std::function;
-using std::exception;
-using std::vector;
-using std::memcpy;
+#include <vector>
+#include <string>
 
-using boost::asio::ip::tcp;
-using boost::asio::ip::udp;
+#include <boost/program_options.hpp>
 
-namespace as = boost::asio;
 namespace po = boost::program_options;
+
+using std::string;
+using std::vector;
+using std::holds_alternative;
+using std::get;
 
 bool parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
     po::options_description desc("Allowed options");
@@ -46,10 +37,15 @@ bool parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
 
     for (const auto &flag: flags) {
         if (vm.count(flag.long_name)) {
-            flag.handler(vm, desc);
+            if (holds_alternative<no_param_handler_t>(flag.handler)) {
+                get<no_param_handler_t>(flag.handler)(desc);
+            }
+            else {
+                get<param_handler_t>(flag.handler)(vm);
+            }
         }
         else if (flag.required) {
-                throw MissingFlag();
+            throw MissingFlag();
         }
     }
 
@@ -63,27 +59,4 @@ host_address_t parse_host_address(const string &host) {
     else {
         return INVALID_ADDRESS;
     }
-}
-
-UDPClient* UDPClient::singleton = nullptr;
-
-void UDPClient::init(const host_address &address, const port_t &port) {
-    if (singleton == nullptr)
-        singleton = new UDPClient(address, port);
-
-}
-
-UDPClient *UDPClient::get_instance() {
-    return singleton;
-}
-
-TCPClient* TCPClient::singleton = nullptr;
-
-void TCPClient::init(const host_address &address) {
-    if (singleton == nullptr)
-        singleton = new TCPClient(address);
-}
-
-TCPClient *TCPClient::get_instance() {
-    return singleton;
 }

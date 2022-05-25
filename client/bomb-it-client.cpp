@@ -1,66 +1,30 @@
 #include <iostream>
 #include <string>
 #include <optional>
-#include <variant>
 #include <functional>
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
-#include <csignal>
 
-#include <boost/asio.hpp>
-#include <boost/array.hpp>
 #include <boost/program_options.hpp>
 #include <boost/thread.hpp>
 
-#include "utils.h"
+#include "connection.h"
+#include "message_types.h"
+#include "command_parser.h"
 
 using std::cout;
 using std::endl;
 using std::string;
 using std::optional;
 using std::nullopt;
-using std::variant;
-using std::get;
-using std::visit;
 using std::function;
-using std::exception;
 using std::vector;
 using std::cerr;
 using std::unordered_map;
-using std::copy_n;
 using std::unordered_set;
 
-using boost::asio::ip::tcp;
-using boost::asio::ip::udp;
-
-namespace as = boost::asio;
 namespace po = boost::program_options;
-
-using player_num_t = uint8_t;
-using score_t = uint32_t;
-using message_id_t = uint8_t;
-using turn_t = uint16_t;
-using explosion_radius_t = uint16_t;
-
-constexpr message_id_t GC_PLACE_BOMB = 0;
-constexpr message_id_t GC_PLACE_BLOCK = 1;
-constexpr message_id_t GC_MOVE = 2;
-
-constexpr message_id_t CG_LOBBY = 0;
-constexpr message_id_t CG_GAME = 1;
-
-constexpr message_id_t CS_JOIN = 0;
-
-constexpr message_id_t SC_ACCEPTED_PLAYER = 1;
-constexpr message_id_t SC_GAME_STARTED = 2;
-constexpr message_id_t SC_TURN = 3;
-constexpr message_id_t SC_GAME_ENDED = 4;
-
-constexpr message_id_t BOMB_PLACED = 0;
-constexpr message_id_t BOMB_EXPLODED = 1;
-constexpr message_id_t PLAYER_MOVED = 2;
-constexpr message_id_t BLOCK_PLACED = 3;
 
 enum StateType {
     IDLE,
@@ -88,50 +52,11 @@ public:
 
 GameState game_state{};
 
-using player_map_t = unordered_map<player_num_t, player_t>;
-
 using command_parameters_t = struct command_parameters {
     host_address_t gui_address;
     string player_name;
     port_t port = 0;
     host_address_t server_address;
-};
-
-/// additional structs
-using server_info_t = struct server_info_t {
-    name_t server_name;
-    player_num_t players_count;
-    coords_t size_x;
-    coords_t size_y;
-    game_time_t game_length;
-};
-
-using hello_t = struct hello_t {
-    server_info_t server_info;
-    explosion_radius_t explosion_radius;
-    game_time_t bomb_timer;
-};
-
-using bomb_placed_t = struct bomb_placed_t {
-    bomb_id_t bomb_id;
-    position_t position;
-};
-
-using bomb_exploded_t = struct bomb_exploded_t {
-    bomb_id_t bomb_id;
-    size_t robots_destroyed_size;
-    vector<player_num_t> robots_destroyed;
-    size_t blocks_destroyed_size;
-    vector<position_t> blocks_destroyed;
-};
-
-using player_moved_t = struct player_moved_t {
-    player_num_t player_id;
-    position_t position;
-};
-
-using block_placed_t = struct block_placed_t {
-    position_t position;
 };
 
 optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
@@ -140,24 +65,24 @@ optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
 
     vector<flag_t> flags{
         { "help", "h", nullopt, false, "produce help message",
-            [&](po::variables_map &vm, auto &desc) {
+            [&](po::options_description &desc) {
                 cout << desc << "\n";
                 with_help = true;
-            }}, // Help must be first in array flags
+            }},
         { "gui-address", "d", po::value<string>(), true, "<(nazwa hosta):(port) lub (IPv4):(port) lub (IPv6):(port)>",
-            [&](po::variables_map &vm, auto &desc) {
+            [&](po::variables_map &vm) {
                 command_parameters.gui_address = parse_host_address(vm["gui-address"].as<string>());
             }},
         { "player-name", "n", po::value<string>(), true, "string",
-            [&](po::variables_map &vm, auto &desc) {
+            [&](po::variables_map &vm) {
                 command_parameters.player_name = vm["player-name"].as<string>();
             }},
         { "port", "p", po::value<port_t>(), true, "Port na którym klient nasłuchuje komunikatów od GUI",
-            [&](po::variables_map &vm, auto &desc) {
+            [&](po::variables_map &vm) {
                 command_parameters.port = vm["port"].as<port_t>();
             }},
         { "server-address", "s", po::value<string>(), true, "<(nazwa hosta):(port) lub (IPv4):(port) lub (IPv6):(port)>",
-            [&](po::variables_map &vm, auto &desc) {
+            [&](po::variables_map &vm) {
                 command_parameters.server_address = parse_host_address(vm["server-address"].as<string>());
             }}
     };
@@ -178,7 +103,7 @@ void send_join(const command_parameters_t &cp) {
 
 bool validate_gui_message(datagram_t gui_buf) {
     if (gui_buf.len == 0) return false;
-    message_id_t message = gui_buf.buf[0];
+    message_id_t message = static_cast<message_id_t>(gui_buf.buf[0]);
     switch (message) {
         case GC_PLACE_BOMB:
         case GC_PLACE_BLOCK:
@@ -212,11 +137,11 @@ hello_t handle_hello(DatagramReader &server_handler) {
     hello_t res;
     message_id_t m;
     server_handler.read(m)
-        ->read(res.server_info.server_name)
-        ->read(res.server_info.players_count)
-        ->read(res.server_info.size_x)
-        ->read(res.server_info.size_y)
-        ->read(res.server_info.game_length)
+        ->read(res.server_name)
+        ->read(res.players_count)
+        ->read(res.size_x)
+        ->read(res.size_y)
+        ->read(res.game_length)
         ->read(res.explosion_radius)
         ->read(res.bomb_timer);
 
@@ -241,11 +166,11 @@ public:
     void send(DatagramWriter &gui_handler) {
         gui_handler.clear();
         gui_handler.write(CG_LOBBY)
-            ->write(hello.server_info.server_name)
-            ->write(hello.server_info.players_count)
-            ->write(hello.server_info.size_x)
-            ->write(hello.server_info.size_y)
-            ->write(hello.server_info.game_length)
+            ->write(hello.server_name)
+            ->write(hello.players_count)
+            ->write(hello.size_x)
+            ->write(hello.size_y)
+            ->write(hello.game_length)
             ->write(hello.explosion_radius)
             ->write(hello.bomb_timer)
             ->write(player_map)
@@ -276,9 +201,7 @@ private:
     }
 
     bool is_position_valid(const position_t &position) const {
-        return position.x < game_info.server_info.size_x &&
-            position.x >= 0 && position.y >= 0 &&
-            position.y < game_info.server_info.size_y;
+        return position.x < game_info.size_x && position.y < game_info.size_y;
     }
 
     void handle_explosion_stripe(position_t scanner,
@@ -408,10 +331,10 @@ public:
     void send(DatagramWriter &gui_handler) {
         gui_handler.clear();
         gui_handler.write(CG_GAME)
-                ->write(game_info.server_info.server_name)
-                ->write(game_info.server_info.size_x)
-                ->write(game_info.server_info.size_y)
-                ->write(game_info.server_info.game_length)
+                ->write(game_info.server_name)
+                ->write(game_info.size_x)
+                ->write(game_info.size_y)
+                ->write(game_info.game_length)
                 ->write(current_turn)
                 ->write(players)
                 ->write(player_positions)
@@ -439,7 +362,7 @@ void handle_game_ended(DatagramReader &server_handler) {
     }
 }
 
-void from_server_to_gui(const command_parameters_t &cp) {
+void from_server_to_gui() {
     DatagramWriter gui_handler(UDPClient::get_instance());
     DatagramReader server_handler(TCPClient::get_instance());
 
@@ -501,7 +424,7 @@ int main(int argc, char *argv[]) {
     TCPClient::init(cp.server_address);
 
     boost::thread t1{from_gui_to_server, cp};
-    boost::thread t2{from_server_to_gui, cp};
+    boost::thread t2{from_server_to_gui};
     t1.join();
     t2.join();
 }

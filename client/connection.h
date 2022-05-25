@@ -1,5 +1,5 @@
-#ifndef UTILS_H
-#define UTILS_H
+#ifndef CONNECTION_H
+#define CONNECTION_H
 #include <string>
 #include <variant>
 #include <optional>
@@ -10,77 +10,24 @@
 
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
-#include <boost/program_options.hpp>
 #include <arpa/inet.h>
+
+#include "message_types.h"
 
 constexpr uint16_t DATAGRAM_SIZE = 65507;
 
-using name_t = struct name_t {
-    boost::array<char, 256> name;
-    uint8_t len;
-};
-
-using port_t = uint16_t;
-using coords_t = uint16_t;
-using container_size_t = uint32_t;
 using data_t = boost::array<char, DATAGRAM_SIZE>;
 using datagram_t = struct datagram_t {
     data_t buf;
     uint16_t len;
 };
-using bomb_id_t = uint32_t;
-using game_time_t = uint16_t;
+
 using flex_buf_t = std::vector<char>;
-using player_t = struct player_t {
-    name_t name;
-    name_t address;
-};
 
 using boost::asio::ip::tcp;
 using boost::asio::ip::udp;
-using boost::asio::ip::address;
 
 namespace as = boost::asio;
-namespace po = boost::program_options;
-
-using values_t = std::variant<po::typed_value<std::string>*, po::typed_value<uint16_t>*>;
-
-using position_t = struct position_t {
-    coords_t x;
-    coords_t y;
-    bool operator==(const position_t& other) const {
-        return x == other.x && y == other.y;
-    };
-};
-
-class PositionHash {
-public:
-    size_t operator()(const position_t &p) const {
-        return ((size_t)p.x << 16) | p.y;
-    }
-};
-
-using position_set = std::unordered_set<position_t, PositionHash>;
-
-using bomb_t = struct bomb_t {
-    position_t position;
-    game_time_t timer;
-};
-
-struct MissingFlag : public std::exception {
-    const char *what() const throw() {
-        return "Flag is missing! Type ./bomb-it-client --help";
-    }
-};
-
-using flag_t = struct flag {
-    std::string long_name;
-    std::string short_name;
-    std::optional<values_t> value_type;
-    bool required;
-    std::string description;
-    std::function<void(po::variables_map&, po::options_description&)> handler;
-};
 
 using host_address_t = struct host_address {
     std::string host;
@@ -88,10 +35,6 @@ using host_address_t = struct host_address {
 };
 
 const host_address_t INVALID_ADDRESS = {"", ""};
-
-bool parse_command_line(int argc, char *argv[], std::vector<flag_t> &flags);
-
-host_address_t parse_host_address(const std::string &host);
 
 class Client {
 public:
@@ -127,11 +70,11 @@ public:
         socket.close();
     }
 
-    void read_some(datagram_t &data) { //TODO exception safety
-         data.len = socket.receive(as::buffer(data.buf));
+    void read_some(datagram_t &data) override { //TODO exception safety
+         data.len = static_cast<uint16_t>(socket.receive(as::buffer(data.buf)));
     }
 
-    void send(datagram_t &data) {
+    void send(datagram_t &data) override {
         socket.send_to(as::buffer(data.buf, data.len), endpoint);
     }
 
@@ -170,7 +113,8 @@ public:
     }
 
     void read_some(datagram_t &data) override { //TODO exception safety
-        data.len = socket.read_some(as::buffer(data.buf));
+        data.len = static_cast<uint16_t>(socket.read_some(
+                as::buffer(data.buf)));
     }
 
     void send(datagram_t &data) override {
@@ -228,7 +172,7 @@ public:
 
     DatagramReader* read(uint8_t &n) {
         flex_buf_t buf = prepare_buf(sizeof(uint8_t));
-        n = buf[0];
+        n = static_cast<uint8_t>(buf[0]);
         return this;
     }
 
@@ -273,17 +217,17 @@ public:
     }
 
     DatagramWriter* write(const std::string &str) {
-        write((uint8_t)str.length());
+        write(static_cast<uint8_t>(str.length()));
         prepare_buf(str.length());
         std::copy_n(str.begin(), str.length(), data.buf.begin() + data.len);
-        data.len += str.length();
+        data.len = static_cast<uint16_t>(data.len + str.length());
         return this;
     }
 
     DatagramWriter* write(const uint8_t n) {
         prepare_buf(sizeof(uint8_t));
         memcpy(data.buf.begin() + data.len, &n, sizeof(uint8_t));
-        data.len += sizeof(uint8_t);
+        data.len = static_cast<uint16_t>(data.len + sizeof(uint8_t));
         return this;
     }
 
@@ -291,7 +235,7 @@ public:
         prepare_buf(sizeof(uint16_t));
         uint16_t net_n = htons(n);
         memcpy(data.buf.begin() + data.len, &net_n, sizeof(uint16_t));
-        data.len += sizeof(uint16_t);
+        data.len = static_cast<uint16_t>(data.len + sizeof(uint16_t));
         return this;
     }
 
@@ -299,7 +243,7 @@ public:
         prepare_buf(sizeof(uint32_t));
         uint32_t net_n = htonl(n);
         memcpy(data.buf.begin() + data.len, &net_n, sizeof(uint32_t));
-        data.len += sizeof(uint32_t);
+        data.len = static_cast<uint16_t>(data.len + sizeof(uint32_t));
         return this;
     }
 
@@ -307,7 +251,7 @@ public:
         write(name.len);
         prepare_buf(name.len);
         std::copy_n(name.name.begin(), name.len, data.buf.begin() + data.len);
-        data.len += name.len;
+        data.len = static_cast<uint16_t>(data.len + name.len);
         return this;
     }
 
@@ -321,7 +265,7 @@ public:
 
     template<class T, class V>
     DatagramWriter* write(std::unordered_map<T, V> &m) {
-        write((container_size_t)m.size());
+        write(static_cast<container_size_t>(m.size()));
         for (const auto &item: m) {
             write(item.first)->write(item.second);
         }
@@ -329,7 +273,7 @@ public:
     }
 
     DatagramWriter* write(position_set &s) {
-        write((container_size_t)s.size());
+        write(static_cast<container_size_t>(s.size()));
         for (const auto &item: s) {
             write(item);
         }
@@ -341,4 +285,4 @@ public:
     }
 };
 
-#endif // UTILS_H
+#endif // CONNECTION_H
