@@ -67,16 +67,23 @@ host_address_t parse_host_address(const string &host) {
 
 UDPClient* UDPClient::singleton = nullptr;
 
-UDPClient *UDPClient::get_instance(const host_address &address, const port_t &port) {
+void UDPClient::init(const host_address &address, const port_t &port) {
     if (singleton == nullptr)
         singleton = new UDPClient(address, port);
+
+}
+
+UDPClient *UDPClient::get_instance() {
     return singleton;
 }
 
 TCPClient* TCPClient::singleton = nullptr;
 
-TCPClient *TCPClient::get_instance(const host_address &address) {
+void TCPClient::init(const host_address &address) {
     if (singleton == nullptr)
         singleton = new TCPClient(address);
+}
+
+TCPClient *TCPClient::get_instance() {
     return singleton;
 }

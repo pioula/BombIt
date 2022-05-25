@@ -6,6 +6,7 @@
 #include <vector>
 #include <unordered_map>
 #include <unordered_set>
+#include <csignal>
 
 #include <boost/asio.hpp>
 #include <boost/array.hpp>
@@ -39,54 +40,53 @@ namespace po = boost::program_options;
 using player_num_t = uint8_t;
 using score_t = uint32_t;
 using message_id_t = uint8_t;
-using container_size_t = uint32_t;
 using turn_t = uint16_t;
+using explosion_radius_t = uint16_t;
 
-constexpr player_num_t MAX_PLAYER_ID = 25;
-
-/// Client -> GUI messages
-constexpr message_id_t CG_LOBBY = 0;
-constexpr message_id_t CG_GAME = 1;
-
-/// GUI -> Client messages
 constexpr message_id_t GC_PLACE_BOMB = 0;
 constexpr message_id_t GC_PLACE_BLOCK = 1;
 constexpr message_id_t GC_MOVE = 2;
 
-/// Client -> Server messages
-constexpr message_id_t CS_JOIN = 0;
-constexpr message_id_t CS_PLACE_BOMB = 1;
-constexpr message_id_t CS_PLACE_BLOCK = 2;
-constexpr message_id_t CS_MOVE = 3;
+constexpr message_id_t CG_LOBBY = 0;
+constexpr message_id_t CG_GAME = 1;
 
-/// Server -> Client messages
-constexpr message_id_t SC_HELLO = 0;
+constexpr message_id_t CS_JOIN = 0;
+
 constexpr message_id_t SC_ACCEPTED_PLAYER = 1;
 constexpr message_id_t SC_GAME_STARTED = 2;
 constexpr message_id_t SC_TURN = 3;
 constexpr message_id_t SC_GAME_ENDED = 4;
 
 constexpr message_id_t BOMB_PLACED = 0;
-constexpr message_id_t BOMB_EXPLOADED = 1;
+constexpr message_id_t BOMB_EXPLODED = 1;
 constexpr message_id_t PLAYER_MOVED = 2;
 constexpr message_id_t BLOCK_PLACED = 3;
 
-enum State {
+enum StateType {
+    IDLE,
     IN_LOBBY,
     IN_GAME,
 };
 
-enum Direction {
-    UP = 0,
-    RIGHT = 1,
-    DOWN = 2,
-    LEFT = 3,
+class GameState {
+private:
+    mutable boost::mutex mutex;
+    StateType state;
+public:
+    GameState(): state(StateType::IDLE) {};
+
+    StateType get_state() const {
+        boost::lock_guard<boost::mutex> guard(mutex);
+        return state;
+    }
+
+    void set_state(const StateType &new_state) {
+        boost::lock_guard<boost::mutex> guard(mutex);
+        state = new_state;
+    }
 };
 
-using player_t = struct player_t {
-    name_t name;
-    name_t address;
-};
+GameState game_state{};
 
 using player_map_t = unordered_map<player_num_t, player_t>;
 
@@ -106,52 +106,10 @@ using server_info_t = struct server_info_t {
     game_time_t game_length;
 };
 
-/// Client -> GUI server structs
-using game_settings_t = struct game_settings_t {
-    server_info_t server_info;
-    uint16_t explosion_radius;
-    game_time_t bomb_timer;
-    player_map_t players;
-};
-
-using game_info_t = struct game_info_t {
-    server_info_t server_info;
-    uint16_t turn;
-    player_map_t players;
-    unordered_map<player_num_t, position_t> player_positions;
-    size_t blocks_size;
-    vector<position_t> blocks;
-    size_t bombs_size;
-    vector<bomb_t> bombs;
-    size_t explosions_size;
-    vector<position_t> explosions;
-    unordered_map<player_num_t, score_t> scores;
-};
-
-/// GUI server -> Client structs
-struct move_t { // Used also for Client -> server
-    Direction direction;
-};
-
-/// Client -> Server
-using join_t = struct join_t {
-    name_t name;
-};
-
-/// Server -> Client
 using hello_t = struct hello_t {
     server_info_t server_info;
-    uint16_t explosion_radius;
+    explosion_radius_t explosion_radius;
     game_time_t bomb_timer;
-};
-
-using accepted_player_t = struct accepted_player_t {
-    player_num_t player_id;
-    player_t player;
-};
-
-using game_started_t = struct game_started_t {
-    player_map_t players;
 };
 
 using bomb_placed_t = struct bomb_placed_t {
@@ -176,27 +134,6 @@ using block_placed_t = struct block_placed_t {
     position_t position;
 };
 
-using event_t = variant<bomb_placed_t, bomb_exploded_t, player_moved_t, block_placed_t>;
-
-using game_ended_t = struct game_ended_t {
-    size_t scores_size;
-    unordered_map<player_num_t, score_t> scores;
-};
-
-void printf_datagram(datagram_t &d, size_t len) {
-    for (size_t i = 0; i < len; i++) {
-        cout << d[i] << " ";
-    }
-    puts("");
-}
-
-void printf_dataHandler(DatagramHandler &d) {
-    for (size_t i = 0; i < d.get_len(); i++) {
-        cout << ((uint16_t)(*d.get_buf())[i])%256 << " " << ((uint8_t)(*d.get_buf())[i]) << "\n";
-    }
-    puts("");
-}
-
 optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
     command_parameters_t command_parameters;
     bool with_help = false;
@@ -209,22 +146,18 @@ optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
             }}, // Help must be first in array flags
         { "gui-address", "d", po::value<string>(), true, "<(nazwa hosta):(port) lub (IPv4):(port) lub (IPv6):(port)>",
             [&](po::variables_map &vm, auto &desc) {
-                cout << "gui\n";
                 command_parameters.gui_address = parse_host_address(vm["gui-address"].as<string>());
             }},
         { "player-name", "n", po::value<string>(), true, "string",
             [&](po::variables_map &vm, auto &desc) {
-                cout << "player\n";
                 command_parameters.player_name = vm["player-name"].as<string>();
             }},
         { "port", "p", po::value<port_t>(), true, "Port na którym klient nasłuchuje komunikatów od GUI",
             [&](po::variables_map &vm, auto &desc) {
-                cout << "port\n";
                 command_parameters.port = vm["port"].as<port_t>();
             }},
         { "server-address", "s", po::value<string>(), true, "<(nazwa hosta):(port) lub (IPv4):(port) lub (IPv6):(port)>",
             [&](po::variables_map &vm, auto &desc) {
-                cout << "server\n";
                 command_parameters.server_address = parse_host_address(vm["server-address"].as<string>());
             }}
     };
@@ -237,36 +170,48 @@ optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
         return nullopt;
 }
 
-DatagramHandler join(const string &name) {
-    DatagramHandler buf;
+void send_join(const command_parameters_t &cp) {
+    DatagramWriter buf(TCPClient::get_instance());
     message_id_t tmp = CS_JOIN;
-    return *buf.write(tmp)->write(name);
+    buf.write(tmp)->write(cp.player_name)->send();
 }
 
-void from_gui_to_server(const command_parameters_t &cp) {
-    UDPClient* gui_handler = UDPClient::get_instance(cp.gui_address, cp.port);
-    TCPClient* server_handler = TCPClient::get_instance(cp.server_address);
-
-    datagram_t gui_buf;
-
-    gui_handler->receive(gui_buf);
-    puts("1: Jestem");
-    DatagramHandler join_mes = join(cp.player_name);
-    puts("1: Dalej jestem");
-    printf_dataHandler(join_mes);
-    server_handler->send(join_mes);
-    puts("1: Wysłałem");
-    for (;;) {
-        size_t len = gui_handler->receive(gui_buf);
-        gui_buf[0]++;
-        server_handler->send(gui_buf, len);
+bool validate_gui_message(datagram_t gui_buf) {
+    if (gui_buf.len == 0) return false;
+    message_id_t message = gui_buf.buf[0];
+    switch (message) {
+        case GC_PLACE_BOMB:
+        case GC_PLACE_BLOCK:
+            return gui_buf.len == 1;
+        case GC_MOVE:
+            return gui_buf.len == 2 && gui_buf.buf[1] >= 0 && gui_buf.buf[1] <= 3;
+        default:
+            return false;
     }
 }
 
-hello_t handle_hello(DatagramHandler &hello_buf) {
+void from_gui_to_server(const command_parameters_t &cp) {
+    UDPClient* gui_handler = UDPClient::get_instance();
+    TCPClient* server_handler = TCPClient::get_instance();
+
+    datagram_t gui_buf;
+    for (;;) {
+        gui_handler->read_some(gui_buf);
+        if (!validate_gui_message(gui_buf)) continue;
+        if (game_state.get_state() == StateType::IN_LOBBY) {
+            send_join(cp);
+        }
+        else if (game_state.get_state() == StateType::IN_GAME){
+            gui_buf.buf[0]++;
+            server_handler->send(gui_buf);
+        }
+    }
+}
+
+hello_t handle_hello(DatagramReader &server_handler) {
     hello_t res;
     message_id_t m;
-    hello_buf.read(m)
+    server_handler.read(m)
         ->read(res.server_info.server_name)
         ->read(res.server_info.players_count)
         ->read(res.server_info.size_x)
@@ -280,56 +225,103 @@ hello_t handle_hello(DatagramHandler &hello_buf) {
 
 class LobbyBuf {
 private:
-    DatagramHandler lobby_buf;
-    DatagramHandler player_map;
-    container_size_t number_of_players;
+    hello_t hello;
+    player_map_t player_map{};
 public:
-    LobbyBuf(const datagram_t &hello_buf, const size_t hello_len) :
-        number_of_players(0),
-        lobby_buf(DatagramHandler(hello_buf, hello_len)) {}
+    LobbyBuf(const hello_t &_hello) : hello(_hello) {}
 
-    DatagramHandler add_player(DatagramHandler accepted_player) {
-        number_of_players++;
-        player_map.write(number_of_players)
-            ->write(*accepted_player.get_buf(),
-                         accepted_player.get_len() - 1, sizeof(message_id_t));
-        return lobby_buf.concat(player_map);
+    void add_player(DatagramReader &accepted_player) {
+        player_num_t player_id;
+        player_t player;
+        accepted_player.read(player_id);
+        accepted_player.read(player);
+        player_map[player_id] = player;
+    }
+
+    void send(DatagramWriter &gui_handler) {
+        gui_handler.clear();
+        gui_handler.write(CG_LOBBY)
+            ->write(hello.server_info.server_name)
+            ->write(hello.server_info.players_count)
+            ->write(hello.server_info.size_x)
+            ->write(hello.server_info.size_y)
+            ->write(hello.server_info.game_length)
+            ->write(hello.explosion_radius)
+            ->write(hello.bomb_timer)
+            ->write(player_map)
+            ->send();
     }
 };
 
 class GameInfo {
 private:
-    server_info_t server_info;
-    DatagramHandler players;
-    unordered_map<player_num_t, position_t> player_positions;
-    position_set blocks;
-    unordered_map<bomb_id_t, bomb_t> bombs;
-    unordered_map<player_num_t, score_t> scores;
-    turn_t current_turn;
-    game_time_t base_bomb_time;
-    vector<position_t> explosions;
+    hello_t                                 game_info;
+    turn_t                                  current_turn;
+    player_map_t                            players{};
+    unordered_map<player_num_t, position_t> player_positions{};
+    position_set                            blocks{};
+    unordered_map<bomb_id_t, bomb_t>        bombs{};
+    position_set                            explosions{};
+    unordered_map<player_num_t, score_t>    scores{};
 
-    void handle_bomb_placed(DatagramHandler &turn) {
+    unordered_set<player_num_t>             destroyed_robots{};
+    position_set                            destroyed_blocks{};
+
+    void handle_bomb_placed(DatagramReader &turn) {
         bomb_id_t bomb_id;
         bomb_t new_bomb;
-        new_bomb.timer = base_bomb_time;
+        new_bomb.timer = game_info.bomb_timer;
         turn.read(bomb_id)->read(new_bomb.position);
         bombs[bomb_id] = new_bomb;
     }
 
-    void handle_bomb_exploaded(DatagramHandler &turn) {
+    bool is_position_valid(const position_t &position) const {
+        return position.x < game_info.server_info.size_x &&
+            position.x >= 0 && position.y >= 0 &&
+            position.y < game_info.server_info.size_y;
+    }
+
+    void handle_explosion_stripe(position_t scanner,
+                                 const function<void(position_t&)> &shifter) {
+        for (explosion_radius_t i = 0; i < game_info.explosion_radius; i++) {
+            shifter(scanner);
+            if (!is_position_valid(scanner)) break;
+            explosions.insert(scanner);
+            if (blocks.contains(scanner)) break;
+        }
+    }
+
+    void handle_explosions(const position_t &bomb_position) {
+        explosions.insert(bomb_position);
+        if (!blocks.contains(bomb_position)) {
+            handle_explosion_stripe(bomb_position,
+                                    [](position_t &p){p.x++;});
+            handle_explosion_stripe(bomb_position,
+                                    [](position_t &p){p.x--;});
+            handle_explosion_stripe(bomb_position,
+                                    [](position_t &p){p.y++;});
+            handle_explosion_stripe(bomb_position,
+                                    [](position_t &p){p.y--;});
+        }
+    }
+
+    void handle_bomb_exploded(DatagramReader &turn) {
         bomb_id_t bomb_id;
         turn.read(bomb_id);
-        explosions.push_back(bombs[bomb_id].position);
-        player_num_t robots_destroyed;
+
+        position_t bomb_position = bombs[bomb_id].position;
+        bombs.erase(bomb_id);
+
+        container_size_t robots_destroyed;
         turn.read(robots_destroyed);
 
-        for (player_num_t i = 0; i < robots_destroyed; i++) {
+        for (container_size_t i = 0; i < robots_destroyed; i++) {
             player_num_t player_id;
             turn.read(player_id);
-            if (!scores.contains(player_id)) scores[player_id] = 0;
-            scores[player_id]++;
+            destroyed_robots.insert(player_id);
         }
+
+        handle_explosions(bomb_position);
 
         container_size_t block_count;
         turn.read(block_count);
@@ -337,72 +329,48 @@ private:
         for (container_size_t i = 0; i < block_count; i++) {
             position_t position;
             turn.read(position);
-            blocks.erase(position);
+            destroyed_blocks.insert(position);
         }
     }
 
-    void handle_player_moved(DatagramHandler &turn) {
+    void handle_player_moved(DatagramReader &turn) {
         player_num_t id;
         position_t pos;
         turn.read(id)->read(pos);
         player_positions[id] = pos;
     }
 
-    void handle_block_placed(DatagramHandler &turn) {
+    void handle_block_placed(DatagramReader &turn) {
         position_t pos;
         turn.read(pos);
         blocks.insert(pos);
     }
 
-    DatagramHandler generate_game_info() {
-        DatagramHandler game_info;
-        game_info.write(server_info.server_name)
-            ->write(server_info.size_x)
-            ->write(server_info.size_y)
-            ->write(server_info.game_length)
-            ->write(current_turn)
-            ->write(*players.get_buf(), players.get_len(), sizeof(message_id_t));
-
-        game_info.write((player_num_t)player_positions.size());
-        for (const auto &position: player_positions) {
-            game_info.write(position.first) // player_id
-                ->write(position.second); // position
-        }
-
-        game_info.write((container_size_t)blocks.size());
-        for (const auto &position: blocks) {
-            game_info.write(position);
-        }
-
-        game_info.write((container_size_t)bombs.size());
-        for (const auto &bomb: bombs) {
-            game_info.write(bomb.second);
-        }
-
-        game_info.write((container_size_t)explosions.size());
-        for (const auto &position: explosions) {
-            game_info.write(position);
-        }
-
-        game_info.write((player_num_t)scores.size());
-        for (const auto &score: scores) {
-            game_info.write(score.first) // player_id
-                ->write(score.second); // score
-        }
-
-        return game_info;
-    }
-
 public:
-    GameInfo(const server_info_t _server_info, const game_time_t _base_bomb_time) :
-        server_info(_server_info), base_bomb_time(_base_bomb_time) {};
+    GameInfo(const hello_t _game_info) :
+        game_info(_game_info) {};
 
-    void set_gamers(const DatagramHandler &gamers) {
-        players = gamers;
+    void set_gamers(DatagramReader &gamers) {
+        container_size_t gamers_size;
+        gamers.read(gamers_size);
+        for (container_size_t i = 0; i < gamers_size; i++) {
+            player_num_t player_id;
+            player_t player;
+            gamers.read(player_id)->read(player);
+            players[player_id] = player;
+            scores[player_id] = 0;
+        }
     }
 
-    DatagramHandler handle_turn(DatagramHandler &turn) {
+    void handle_turn(DatagramReader &turn) {
         explosions.clear();
+        destroyed_robots.clear();
+        destroyed_blocks.clear();
+
+        for (auto &bomb: bombs) {
+            bomb.second.timer--;
+        }
+
         container_size_t events_count;
         turn.read(current_turn)->read(events_count);
         for (container_size_t i = 0; i < events_count; i++) {
@@ -412,8 +380,8 @@ public:
                 case BOMB_PLACED:
                     handle_bomb_placed(turn);
                     break;
-                case BOMB_EXPLOADED:
-                    handle_bomb_exploaded(turn);
+                case BOMB_EXPLODED:
+                    handle_bomb_exploded(turn);
                     break;
                 case PLAYER_MOVED:
                     handle_player_moved(turn);
@@ -422,75 +390,96 @@ public:
                     handle_block_placed(turn);
                     break;
                 default:
-                    continue;
+                    cerr << "Wrong event id!" << endl;
+                    exit(1);
             }
         }
 
-        return generate_game_info();
+        for (const auto &robot: destroyed_robots) {
+            if (!scores.contains(robot)) scores[robot] = 0;
+            scores[robot]++;
+        }
+
+        for (const auto &block: destroyed_blocks) {
+            blocks.erase(block);
+        }
+    }
+
+    void send(DatagramWriter &gui_handler) {
+        gui_handler.clear();
+        gui_handler.write(CG_GAME)
+                ->write(game_info.server_info.server_name)
+                ->write(game_info.server_info.size_x)
+                ->write(game_info.server_info.size_y)
+                ->write(game_info.server_info.game_length)
+                ->write(current_turn)
+                ->write(players)
+                ->write(player_positions)
+                ->write(blocks);
+
+        gui_handler.write((container_size_t)bombs.size());
+        for (const auto &bomb: bombs) {
+            gui_handler.write(bomb.second);
+        }
+
+        gui_handler.write(explosions)
+                ->write(scores)
+                ->send();
     }
 
 };
 
-void printf_hello(hello_t &h) {
-    cout << h.server_info.server_name.name.data() << " " <<  (int)h.server_info.players_count << " " << h.server_info.size_x << " " << h.server_info.size_y << " " << h.server_info.game_length << " " << h.explosion_radius << " " << h.bomb_timer << "\n";
+void handle_game_ended(DatagramReader &server_handler) {
+    container_size_t size;
+    server_handler.read(size);
+    for (container_size_t i = 0; i < size; i++) {
+        player_num_t player_id;
+        score_t score;
+        server_handler.read(player_id)->read(score);
+    }
 }
 
 void from_server_to_gui(const command_parameters_t &cp) {
-    UDPClient* gui_handler = UDPClient::get_instance(cp.gui_address, cp.port);
-    TCPClient* server_handler = TCPClient::get_instance(cp.server_address);
+    DatagramWriter gui_handler(UDPClient::get_instance());
+    DatagramReader server_handler(TCPClient::get_instance());
 
-    datagram_t gui_buf;
-    datagram_t server_buf;
+    hello_t hello = handle_hello(server_handler);
+    game_state.set_state(StateType::IN_LOBBY);
+    LobbyBuf lobby_buf(hello);
 
-    size_t hello_len = server_handler->receive(server_buf);
-    DatagramHandler hello_buf(server_buf, hello_len);
+    lobby_buf.send(gui_handler);
 
-    LobbyBuf lobby_buf(server_buf, hello_len);
-
-    hello_t hello = handle_hello(hello_buf);
-    printf_hello(hello);
-
-    State current_state = State::IN_LOBBY;
-
-    GameInfo game_info(hello.server_info, hello.bomb_timer);
+    GameInfo game_info(hello);
 
     for (;;) {
-        datagram_t read_buf;
-        puts("2: czekam");
-        size_t len = server_handler->receive(read_buf);
-        puts("2: siema");
-        DatagramHandler message_reader(read_buf, len);
-        printf_dataHandler(message_reader);
         uint8_t message;
-        message_reader.read(message);
-        puts("XD?");
-        cout << "2: mess: " << (int)message << " " << (int)SC_TURN << endl;
+        server_handler.read(message);
         switch (message) {
             case SC_ACCEPTED_PLAYER:
-                if (current_state == State::IN_GAME) continue;
-                puts("2: Accepted Player");
-                message_reader = lobby_buf.add_player(message_reader);
-                gui_handler->send(message_reader);
+                if (game_state.get_state() != StateType::IN_LOBBY) continue;
+                lobby_buf.add_player(server_handler);
+                lobby_buf.send(gui_handler);
                 break;
             case SC_GAME_STARTED:
-                puts("2: Game Started");
-                if (current_state == State::IN_GAME) continue;
-                current_state = State::IN_GAME;
-                game_info.set_gamers(message_reader);
+                if (game_state.get_state() != StateType::IN_LOBBY) continue;
+                game_state.set_state(StateType::IN_GAME);
+                game_info.set_gamers(server_handler);
                 break;
             case SC_TURN:
-                puts("2: Turn");
-                if (current_state == State::IN_LOBBY) continue;
-                message_reader = game_info.handle_turn(message_reader);
-                gui_handler->send(message_reader);
+                if (game_state.get_state() != StateType::IN_GAME) continue;
+                game_info.handle_turn(server_handler);
+                game_info.send(gui_handler);
                 break;
             case SC_GAME_ENDED:
-                puts("2: Game Ended");
-                if (current_state == State::IN_LOBBY) continue;
-                current_state = State::IN_LOBBY;
+                if (game_state.get_state() != StateType::IN_GAME) continue;
+                handle_game_ended(server_handler);
+                game_state.set_state(StateType::IN_LOBBY);
+                lobby_buf = LobbyBuf(hello);
+                game_info = GameInfo(hello);
                 break;
             default:
-                continue;
+                cerr << "Wrong message from server" << endl;
+                exit(1);
         }
     }
 }
@@ -508,9 +497,11 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
+    UDPClient::init(cp.gui_address, cp.port);
+    TCPClient::init(cp.server_address);
+
     boost::thread t1{from_gui_to_server, cp};
     boost::thread t2{from_server_to_gui, cp};
-
     t1.join();
-    cout << "End!" << endl;
+    t2.join();
 }
