@@ -14,42 +14,50 @@
 
 #include "message_types.h"
 
-constexpr uint16_t DATAGRAM_SIZE = 65507;
-
-using data_t = boost::array<char, DATAGRAM_SIZE>;
-using datagram_t = struct datagram_t {
-    data_t buf;
-    uint16_t len;
-};
-
-using flex_buf_t = std::vector<char>;
+namespace as = boost::asio;
 
 using boost::asio::ip::tcp;
 using boost::asio::ip::udp;
 
-namespace as = boost::asio;
+using datagram_size_t = uint16_t;
+
+constexpr datagram_size_t DATAGRAM_SIZE = 65507;
+
+using data_t = boost::array<char, DATAGRAM_SIZE>;
+using datagram_t = struct datagram_t {
+    data_t buf;
+    datagram_size_t len;
+};
+using flex_buf_t = std::vector<char>;
 
 using host_address_t = struct host_address {
     std::string host;
     std::string port;
 };
-
 const host_address_t INVALID_ADDRESS = {"", ""};
 
+// Klasa abstrakcyjna obsługująca komunikację z serwerami jako klient.
 class Client {
 public:
-    virtual void read_some(datagram_t &data) = 0;
-    virtual void send(datagram_t &data) = 0;
-    virtual void close() = 0;
+    // Metoda wczytująca bajty bufora data.
+    // data - bufor na który są wczytywane bajty.
+    virtual void read_some(datagram_t &data) const = 0;
+    // Metoda wysyłająca datagram data do serwera.
+    // data - bufor, który zostaje wysłany
+    virtual void send(const datagram_t &data) const = 0;
 };
 
+// Klasa przedstawiająca klienta komunikującego się z serwerem UDP.
 class UDPClient : public Client {
 protected:
     as::io_context io_context;
     udp::resolver resolver;
     udp::endpoint endpoint;
-    udp::socket socket;
+    mutable udp::socket socket;
 
+    // Konstruktor tworzący socketa do komunikacji.
+    // address - adres serwera UDP
+    // port - port na którym nasłuchuje klient
     UDPClient(const host_address &address, const port_t &port) :
             resolver(udp::resolver(io_context)),
             socket(udp::socket(io_context, udp::endpoint(udp::v6(), port))) {
@@ -62,34 +70,49 @@ public:
 
     void operator=(const UDPClient &) = delete;
 
+    // Metoda inicjująca singleton tej klasy.
+    // address - adres serwera UDP
+    // port - port na którym nasłuchuje klient
     static void init(const host_address &address,
                                    const port_t &port);
+    // Metoda zwracająca singleton tej klasy.
     static UDPClient *get_instance();
 
-    ~UDPClient() { //TODO ogarnączy ddziała czy nie
-        socket.close();
+    void read_some(datagram_t &data) const override {
+        try {
+            data.len =
+                static_cast<datagram_size_t>(
+                    socket.receive(as::buffer(data.buf)));
+        }
+        catch (std::exception &err) {
+            std::cerr << "Błąd połaczenia z gui "
+                      << err.what() << std::endl;
+            exit(1);
+        }
     }
 
-    void read_some(datagram_t &data) override { //TODO exception safety
-         data.len = static_cast<uint16_t>(socket.receive(as::buffer(data.buf)));
-    }
-
-    void send(datagram_t &data) override {
-        socket.send_to(as::buffer(data.buf, data.len), endpoint);
-    }
-
-    void close() override {
-        socket.close();
+    void send(const datagram_t &data) const override {
+        try {
+            socket.send_to(as::buffer(data.buf, data.len), endpoint);
+        }
+        catch (std::exception &err) {
+            std::cerr << "Błąd połaczenia z gui "
+                      << err.what() << std::endl;
+            exit(1);
+        }
     }
 };
 
+// Klasa przedstawiająca klienta komunikującego się z serwerem TCP.
 class TCPClient : public Client {
 protected:
     as::io_context io_context;
     tcp::resolver resolver;
     tcp::resolver::results_type endpoints;
-    tcp::socket socket;
+    mutable tcp::socket socket;
 
+    // Konstruktor tworzący socketa do komunikacji.
+    // address - adres serwera TCP
     TCPClient(const host_address &address) :
             resolver(tcp::resolver(io_context)),
             socket(tcp::socket(io_context)) {
@@ -105,35 +128,46 @@ public:
 
     void operator=(const TCPClient &) = delete;
 
+    // Metoda inicjująca singleton tej klasy.
+    // address - adres serwera TCP
     static void init(const host_address &address);
+    // Metoda zwracająca singleton tej klasy.
     static TCPClient *get_instance();
 
-    ~TCPClient() {
-        socket.close();
+    void read_some(datagram_t &data) const override {
+        boost::system::error_code err;
+        data.len = static_cast<datagram_size_t>(socket.read_some(
+                as::buffer(data.buf), err));
+        if (err) {
+            std::cerr << "Błąd połaczenia z serwerem "
+                << err.what() << std::endl;
+            exit(1);
+        }
     }
 
-    void read_some(datagram_t &data) override { //TODO exception safety
-        data.len = static_cast<uint16_t>(socket.read_some(
-                as::buffer(data.buf)));
-    }
-
-    void send(datagram_t &data) override {
-        socket.send(as::buffer(data.buf, data.len));
-    }
-
-    void close() override {
-        socket.close();
+    void send(const datagram_t &data) const override {
+        try {
+            socket.send(as::buffer(data.buf, data.len));
+        }
+        catch (std::exception &err) {
+            std::cerr << "Błąd połaczenia z serwerem "
+                    << err.what() << std::endl;
+            exit(1);
+        }
     }
 };
 
-
+// Klasa pomagająca w czytaniu z serwera.
 class DatagramReader {
 private:
     Client* client;
     datagram_t data{};
     size_t read_ptr;
 
-    flex_buf_t prepare_buf(size_t bytes) {
+    // Metoda zwracająca kolejne bytes bajtów otrzymanych od serwera.
+    // bytes - liczba bajtów do pozyskania
+    // return - bufor zapełniony bytes bajtami od serwera
+    flex_buf_t prepare_buf(const size_t bytes) {
         flex_buf_t res{};
         for (size_t i = 0; i < bytes; i++) {
             if (read_ptr >= data.len) {
@@ -191,11 +225,15 @@ public:
     }
 };
 
+// Klasa pomagająca w wysyłaniu komunikatów do serwera.
 class DatagramWriter {
 private:
     Client* client;
     datagram_t data;
 
+    // Metoda sprawdzająca czy jest wolnych bytes bajtów do zapisania w buforze.
+    // Jeżeli nie ma, to wysyła bufor do serwera i zwalnia miejsce.
+    // bytes - liczba bajtów do zapisania
     void prepare_buf(size_t bytes) {
         if (data.len + bytes > DATAGRAM_SIZE) {
             client->send(data);
@@ -208,6 +246,7 @@ public:
         data.len = 0;
     };
 
+    // Metoda czyszcząca bufor do zapisu.
     void clear() {
         data.len = 0;
     }
@@ -220,14 +259,14 @@ public:
         write(static_cast<uint8_t>(str.length()));
         prepare_buf(str.length());
         std::copy_n(str.begin(), str.length(), data.buf.begin() + data.len);
-        data.len = static_cast<uint16_t>(data.len + str.length());
+        data.len = static_cast<datagram_size_t>(data.len + str.length());
         return this;
     }
 
     DatagramWriter* write(const uint8_t n) {
         prepare_buf(sizeof(uint8_t));
         memcpy(data.buf.begin() + data.len, &n, sizeof(uint8_t));
-        data.len = static_cast<uint16_t>(data.len + sizeof(uint8_t));
+        data.len = static_cast<datagram_size_t>(data.len + sizeof(uint8_t));
         return this;
     }
 
@@ -235,7 +274,7 @@ public:
         prepare_buf(sizeof(uint16_t));
         uint16_t net_n = htons(n);
         memcpy(data.buf.begin() + data.len, &net_n, sizeof(uint16_t));
-        data.len = static_cast<uint16_t>(data.len + sizeof(uint16_t));
+        data.len = static_cast<datagram_size_t>(data.len + sizeof(uint16_t));
         return this;
     }
 
@@ -243,7 +282,7 @@ public:
         prepare_buf(sizeof(uint32_t));
         uint32_t net_n = htonl(n);
         memcpy(data.buf.begin() + data.len, &net_n, sizeof(uint32_t));
-        data.len = static_cast<uint16_t>(data.len + sizeof(uint32_t));
+        data.len = static_cast<datagram_size_t>(data.len + sizeof(uint32_t));
         return this;
     }
 
@@ -251,7 +290,7 @@ public:
         write(name.len);
         prepare_buf(name.len);
         std::copy_n(name.name.begin(), name.len, data.buf.begin() + data.len);
-        data.len = static_cast<uint16_t>(data.len + name.len);
+        data.len = static_cast<datagram_size_t>(data.len + name.len);
         return this;
     }
 
@@ -280,6 +319,7 @@ public:
         return this;
     }
 
+    // Metoda, która wyssyła zapisany bufor do serwera przez klienta.
     void send() {
         client->send(data);
     }

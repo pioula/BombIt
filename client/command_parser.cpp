@@ -12,13 +12,15 @@ using std::vector;
 using std::holds_alternative;
 using std::get;
 
-bool parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
+void parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
     po::options_description desc("Allowed options");
     for (const auto &flag: flags) {
+        // Przygotowuje flagę do przekazania do add_options
         string flag_names = flag.long_name;
         flag_names.append(",").append(flag.short_name);
 
         if (auto value_type = flag.value_type) {
+            // Obsługa flagi z argumentem.
             string w;
             visit([&](auto value){
                 desc.add_options()
@@ -26,6 +28,7 @@ bool parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
             }, *value_type);
         }
         else {
+            // Obsługa flagi bez argumentu.
             desc.add_options()
                     (flag_names.c_str(), flag.description.c_str());
         }
@@ -44,7 +47,7 @@ bool parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
                 get<param_handler_t>(flag.handler)(vm);
             }
         }
-        else if (flag.required) {
+        else if (flag.required && vm.count("help") == 0) {
             throw MissingFlag();
         }
     }

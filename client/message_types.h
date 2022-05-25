@@ -66,20 +66,25 @@ constexpr message_length_t GC_PLACE_BLOCK_LENGTH = 1;
 constexpr message_length_t GC_MOVE_LENGTH = 2;
 constexpr direction_t MAX_DIRECTION = 3;
 
+// Komunikaty przesyłane gui do klienta.
 constexpr message_id_t GC_PLACE_BOMB = 0;
 constexpr message_id_t GC_PLACE_BLOCK = 1;
 constexpr message_id_t GC_MOVE = 2;
 
+// Komunikaty przesyłane od klienta do gui.
 constexpr message_id_t CG_LOBBY = 0;
 constexpr message_id_t CG_GAME = 1;
 
+// Komunikaty przesyłane od klienta do serwera.
 constexpr message_id_t CS_JOIN = 0;
 
+// Komunikaty przesyłane od serwera do klienta.
 constexpr message_id_t SC_ACCEPTED_PLAYER = 1;
 constexpr message_id_t SC_GAME_STARTED = 2;
 constexpr message_id_t SC_TURN = 3;
 constexpr message_id_t SC_GAME_ENDED = 4;
 
+// Zdarzenia wysyłane od serwera do klienta.
 constexpr message_id_t BOMB_PLACED = 0;
 constexpr message_id_t BOMB_EXPLODED = 1;
 constexpr message_id_t PLAYER_MOVED = 2;
