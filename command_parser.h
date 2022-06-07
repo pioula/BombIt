@@ -11,8 +11,12 @@
 
 namespace po = boost::program_options;
 
-using values_t = std::variant<po::typed_value<std::string>*,
-        po::typed_value<uint16_t>*>;
+using values_t = std::variant<
+        po::typed_value<std::string>*,
+        po::typed_value<uint8_t>*,
+        po::typed_value<uint16_t>*,
+        po::typed_value<uint32_t>*,
+        po::typed_value<uint64_t>*>;
 
 // Wyjątek zwracany w wypadku braku flagi, która jest wymagana.
 struct MissingFlag : public std::exception {

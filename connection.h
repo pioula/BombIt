@@ -1,10 +1,7 @@
 #ifndef CONNECTION_H
 #define CONNECTION_H
 #include <string>
-#include <variant>
-#include <optional>
 #include <exception>
-#include <functional>
 #include <unordered_set>
 #include <iostream>
 
@@ -36,8 +33,8 @@ using host_address_t = struct host_address {
 };
 const host_address_t INVALID_ADDRESS = {"", ""};
 
-// Klasa abstrakcyjna obsługująca komunikację z serwerami jako klient.
-class Client {
+// Klasa abstrakcyjna obsługująca komunikację sieciową.
+class MessageHandler {
 public:
     // Metoda wczytująca bajty bufora data.
     // data - bufor na który są wczytywane bajty.
@@ -48,12 +45,19 @@ public:
 };
 
 // Klasa przedstawiająca klienta komunikującego się z serwerem UDP.
-class UDPClient : public Client {
+class UDPClient : public MessageHandler {
 protected:
     as::io_context io_context;
     udp::resolver resolver;
     udp::endpoint endpoint;
     mutable udp::socket socket;
+
+    // Funkcja obsługująca wyjątki podczas łączenia z gui.
+    static void error_handler(std::exception &err) {
+        std::cerr << "Błąd połaczenia z gui: "
+                  << err.what() << std::endl;
+        exit(1);
+    }
 
     // Konstruktor tworzący socketa do komunikacji.
     // address - adres serwera UDP
@@ -85,9 +89,7 @@ public:
                     socket.receive(as::buffer(data.buf)));
         }
         catch (std::exception &err) {
-            std::cerr << "Błąd połaczenia z gui "
-                      << err.what() << std::endl;
-            exit(1);
+           error_handler(err);
         }
     }
 
@@ -96,20 +98,25 @@ public:
             socket.send_to(as::buffer(data.buf, data.len), endpoint);
         }
         catch (std::exception &err) {
-            std::cerr << "Błąd połaczenia z gui "
-                      << err.what() << std::endl;
-            exit(1);
+            error_handler(err);
         }
     }
 };
 
 // Klasa przedstawiająca klienta komunikującego się z serwerem TCP.
-class TCPClient : public Client {
+class TCPClient : public MessageHandler {
 protected:
     as::io_context io_context;
     tcp::resolver resolver;
     tcp::resolver::results_type endpoints;
     mutable tcp::socket socket;
+
+    // Funkcja obsługująca wyjątki podczas łączenia z serwerem.
+    static void error_handler(std::exception &err) {
+        std::cerr << "Błąd połaczenia z serwerem: "
+                  << err.what() << std::endl;
+        exit(1);
+    }
 
     // Konstruktor tworzący socketa do komunikacji.
     // address - adres serwera TCP
@@ -117,7 +124,14 @@ protected:
             resolver(tcp::resolver(io_context)),
             socket(tcp::socket(io_context)) {
         endpoints = resolver.resolve(address.host, address.port);
-        as::connect(socket, endpoints);
+
+        try {
+            as::connect(socket, endpoints);
+        }
+        catch (std::exception &err) {
+            error_handler(err);
+        }
+
         socket.set_option(tcp::no_delay(true));
     }
 
@@ -135,13 +149,12 @@ public:
     static TCPClient *get_instance();
 
     void read_some(datagram_t &data) const override {
-        boost::system::error_code err;
-        data.len = static_cast<datagram_size_t>(socket.read_some(
-                as::buffer(data.buf), err));
-        if (err) {
-            std::cerr << "Błąd połaczenia z serwerem "
-                << err.what() << std::endl;
-            exit(1);
+        try {
+            data.len = static_cast<datagram_size_t>(socket.read_some(
+                    as::buffer(data.buf)));
+        }
+        catch (std::exception &err) {
+            error_handler(err);
         }
     }
 
@@ -150,17 +163,34 @@ public:
             socket.send(as::buffer(data.buf, data.len));
         }
         catch (std::exception &err) {
-            std::cerr << "Błąd połaczenia z serwerem "
-                    << err.what() << std::endl;
-            exit(1);
+           error_handler(err);
         }
+    }
+};
+
+// Klasa obsługująca połączenie z klientem po TCP.
+class TCPConnection : public MessageHandler {
+private:
+    mutable tcp::socket socket;
+
+public:
+    TCPConnection(tcp::socket &_socket) :
+        socket(std::move(_socket)) {}
+
+    void read_some(datagram_t &data) const override {
+        data.len = static_cast<datagram_size_t>(socket.read_some(
+                as::buffer(data.buf)));
+    }
+
+    void send(const datagram_t &data) const override {
+        socket.send(as::buffer(data.buf, data.len));
     }
 };
 
 // Klasa pomagająca w czytaniu z serwera.
 class DatagramReader {
 private:
-    Client* client;
+    MessageHandler* handler;
     datagram_t data{};
     size_t read_ptr;
 
@@ -171,7 +201,7 @@ private:
         flex_buf_t res{};
         for (size_t i = 0; i < bytes; i++) {
             if (read_ptr >= data.len) {
-                client->read_some(data);
+                handler->read_some(data);
                 read_ptr = 0;
                 i--;
                 continue;
@@ -182,7 +212,8 @@ private:
     }
 
 public:
-    explicit DatagramReader(Client* client) : client(client), read_ptr(0) {
+    explicit DatagramReader(MessageHandler* _handler) :
+            handler(_handler), read_ptr(0) {
         data.buf = {};
         data.len = 0;
     };
@@ -225,23 +256,23 @@ public:
     }
 };
 
-// Klasa pomagająca w wysyłaniu komunikatów do serwera.
+// Klasa pomagająca w wysyłaniu komunikatów.
 class DatagramWriter {
 private:
-    Client* client;
+    MessageHandler* handler;
     datagram_t data;
 
     // Metoda sprawdzająca czy jest wolnych bytes bajtów do zapisania w buforze.
-    // Jeżeli nie ma, to wysyła bufor do serwera i zwalnia miejsce.
+    // Jeżeli nie ma, to wysyła bufor i zwalnia miejsce.
     // bytes - liczba bajtów do zapisania
     void prepare_buf(size_t bytes) {
         if (data.len + bytes > DATAGRAM_SIZE) {
-            client->send(data);
+            handler->send(data);
             data.len = 0;
         }
     }
 public:
-    explicit DatagramWriter(Client* _client) : client(_client) {
+    explicit DatagramWriter(MessageHandler* _client) : handler(_client) {
         data.buf = {};
         data.len = 0;
     };
@@ -319,9 +350,18 @@ public:
         return this;
     }
 
-    // Metoda, która wyssyła zapisany bufor do serwera przez klienta.
+    template<class T>
+    DatagramWriter* write(const std::unordered_set<T> &s) {
+        write(static_cast<container_size_t>(s.size()));
+        for (const auto &item: s) {
+            write(item);
+        }
+        return this;
+    }
+
+    // Metoda, która wysyła zapisany bufor.
     void send() {
-        client->send(data);
+        handler->send(data);
     }
 };
 

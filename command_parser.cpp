@@ -51,8 +51,6 @@ void parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
             throw MissingFlag();
         }
     }
-
-    return true;
 }
 
 host_address_t parse_host_address(const string &host) {
