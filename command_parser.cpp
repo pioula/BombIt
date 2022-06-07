@@ -15,7 +15,7 @@ using std::get;
 void parse_command_line(int argc, char *argv[], vector<flag_t> &flags) {
     po::options_description desc("Allowed options");
     for (const auto &flag: flags) {
-        // Przygotowuje flagę do przekazania do add_options
+        // Przygotowuje flagę do przekazania do add_options.
         string flag_names = flag.long_name;
         flag_names.append(",").append(flag.short_name);
 
