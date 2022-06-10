@@ -129,6 +129,7 @@ namespace {
     //          przetworzone parametry
     optional<command_parameters_t> parse_parameters(int argc, char *argv[]) {
         command_parameters_t command_parameters;
+        command_parameters.seed = 0;  // Domyślny seed.
         bool with_help = false;
 
         vector<flag_t> flags{
@@ -391,10 +392,11 @@ namespace {
     class Player {
     private:
         position_t position; // Pozycja gracza.
+        accepted_player_t player_info;
+        score_t score;
         // Akcja jaką wykonał gracz w tej turze.
         optional<player_action_t> action;
-        score_t score;
-        accepted_player_t player_info;
+
     public:
         Player(accepted_player_t &player) :
                 player_info(player), score(0), action(nullopt) {}
@@ -504,7 +506,8 @@ namespace {
             server_message_t game_started{SC_GAME_STARTED, nullptr};
             player_map_t join_players;
             for (size_t i = 0; i < players.size(); i++) {
-                join_players[i] = players[i].get_player_info().player;
+                join_players[static_cast<player_num_t>(i)]
+                    = players[i].get_player_info().player;
             }
             game_started.data = join_players;
             return game_started;
@@ -684,14 +687,11 @@ namespace {
             }
 
             for (block_count_t i = 0; i < initial_blocks; i++) {
-                while (true) {
-                    position_t new_position = random_position();
-                    if (blocks.contains(new_position)) continue;
-                    blocks.insert(new_position);
-                    block_placed_t bp{new_position};
-                    turn.events.push_back(bp);
-                    break;
-                }
+                position_t new_position = random_position();
+                if (blocks.contains(new_position)) continue;
+                blocks.insert(new_position);
+                block_placed_t bp{new_position};
+                turn.events.push_back(bp);
             }
 
             game_state = GAME;
@@ -717,7 +717,8 @@ namespace {
         void end_game(server_queue_list_t &queues) {
             scores_t scores;
             for (size_t i = 0; i < players.size(); i++) {
-                scores[i] = players[i].get_score();
+                scores[static_cast<player_num_t>(i)]
+                    = players[i].get_score();
             }
             server_message_t sm{SC_GAME_ENDED, scores};
             for (auto &queue: queues) {
@@ -815,7 +816,8 @@ namespace {
                 }
                 else {
                     if (players[i].get_action()) {
-                        handle_player_action(i, *players[i].get_action(),
+                        handle_player_action(static_cast<player_num_t>(i),
+                                             *players[i].get_action(),
                                              new_blocks, gm.events);
                     }
                 }

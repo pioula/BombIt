@@ -170,7 +170,7 @@ inline name_t string_to_name(const std::string &s) {
     name_t res;
     copy_n(s.begin(), s.length(),
            res.name.begin());
-    res.len = s.length();
+    res.len = static_cast<uint8_t>(s.length());
     return res;
 }
 

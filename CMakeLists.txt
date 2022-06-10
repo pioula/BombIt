@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.0)
 project(robots)
 
 set(CMAKE_CXX_STANDARD 20)
-#set(CMAKE_CXX_FLAGS "-Wall -Wextra -Wconversion -Werror -O2")
+set(CMAKE_CXX_FLAGS "-Wall -Wextra -Wconversion -Werror -O2")
 
 find_package(Boost REQUIRED program_options system thread chrono)
 include_directories(${BOOST_INCLUDE_DIRS})
@@ -15,8 +15,6 @@ add_executable(robots-client bomb-it-client.cpp message_types.h)
 target_link_libraries(robots-client ${Boost_LIBRARIES} connection command_parser)
 add_executable(robots-server bomb-it-server.cpp message_types.h blocking_queue.h latch.h)
 target_link_libraries(robots-server ${Boost_LIBRARIES} connection command_parser)
-add_executable(test-tcp test-tcp-client.cpp message_types.h blocking_queue.h)
-target_link_libraries(test-tcp ${Boost_LIBRARIES} connection command_parser)
 
 
 install(TARGETS DESTINATION .)
